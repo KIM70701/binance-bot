@@ -1,112 +1,116 @@
 import os
 import time
-import threading
 import requests
 import pandas as pd
+from threading import Thread
 from flask import Flask
 
-# ==========================================
-# 1. 기본 설정 및 사용자 정보
-# ==========================================
-BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
-CHAT_ID = "5624306078"
-INTERVAL = "1m"
+# ----------------- 기본 설정 -----------------
+SYMBOL = "ETHUSDT"
+INTERVAL = "15m"   # 필요 시 "1m" 또는 "15m"으로 변경
+BB_PERIOD = 45
+BB_STD = 2
 
-current_candle_time = None
-alerted_upper = False
-alerted_lower = False
+# 텔레그램 설정
+TELEGRAM_BOT_TOKEN = "여기에_봇토큰_입력"
+TELEGRAM_CHAT_ID = "여기에_채팅방ID_입력"
+# ---------------------------------------------
 
-session = requests.Session()
-
-# ==========================================
-# 2. 텔레그램 발송 및 바이낸스 감시 로직
-# ==========================================
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        session.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=15)
-    except Exception as e:
-        print(f"텔레그램 전송 오류: {e}")
-
-def check_bollinger_realtime():
-    global current_candle_time, alerted_upper, alerted_lower
-    
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol=ETHUSDT&interval={INTERVAL}&limit=60"
-    res = session.get(url, timeout=10).json()
-    
-    df = pd.DataFrame(res, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "q_vol", "trades", "tb_base_vol", "tb_quote_vol", "ignore"
-    ])
-    df["close"] = df["close"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    
-    period = 45
-    std_mult = 2
-    df["mid"] = df["close"].rolling(window=period).mean()
-    df["std"] = df["close"].rolling(window=period).std()
-    df["upper"] = df["mid"] + (df["std"] * std_mult)
-    df["lower"] = df["mid"] - (df["std"] * std_mult)
-    
-    now_candle = df.iloc[-1]
-    candle_time = now_candle["open_time"]
-    current_high = now_candle["high"]
-    current_low = now_candle["low"]
-    upper_band = now_candle["upper"]
-    lower_band = now_candle["lower"]
-    
-    if candle_time != current_candle_time:
-        current_candle_time = candle_time
-        alerted_upper = False
-        alerted_lower = False
-    
-    if current_high >= upper_band and not alerted_upper:
-        send_telegram("상단")
-        alerted_upper = True
-        print("상단 돌파 알림 전송")
-
-    if current_low <= lower_band and not alerted_lower:
-        send_telegram("하단")
-        alerted_lower = True
-        print("하단 돌파 알림 전송")
-
-def bot_loop():
-    print("ETH 볼린저밴드(45) 감시 시작...")
-    send_telegram("시작")
-    while True:
-        try:
-            check_bollinger_realtime()
-        except Exception as e:
-            print(f"조회 일시 지연: {e}")
-        time.sleep(5)
-
-# ==========================================
-# 3. Render 슬립 방지용 웹 서버 (무료 유지)
-# ==========================================
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
-    return "Bot is running 24/7!"
+    return "Bot is running!"
 
-def keep_alive():
-    time.sleep(30)
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        print(f"텔레그램 발송 오류: {e}")
+
+def get_klines():
+    # 실시간 미완성봉 포함 45개 데이터 조회
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    params = {
+        "symbol": SYMBOL,
+        "interval": INTERVAL,
+        "limit": BB_PERIOD
+    }
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+        df = pd.DataFrame(data, columns=[
+            "open_time", "open", "high", "low", "close", "volume",
+            "close_time", "q_vol", "trades", "tb_base", "tb_quote", "ignore"
+        ])
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        return df
+    except Exception as e:
+        print(f"바이낸스 조회 에러: {e}")
+        return None
+
+def monitor():
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 볼밴 감시 가동)")
+    last_candle_time = None
+    notified_upper = False
+    notified_lower = False
+
     while True:
         try:
-            render_url = os.environ.get("RENDER_EXTERNAL_URL")
-            if render_url:
-                requests.get(render_url, timeout=10)
+            df = get_klines()
+            if df is not None and len(df) == BB_PERIOD:
+                current_candle_time = df.iloc[-1]["open_time"]
+
+                # 새 봉이 생기면 알림 플래그 리셋
+                if current_candle_time != last_candle_time:
+                    last_candle_time = current_candle_time
+                    notified_upper = False
+                    notified_lower = False
+
+                # 바이낸스 차트와 동일: 실시간 현재가 포함 45개 봉, ddof=0(모표준편차)
+                ma = df["close"].mean()
+                std = df["close"].std(ddof=0)
+                upper_band = ma + (BB_STD * std)
+                lower_band = ma - (BB_STD * std)
+
+                current_high = df.iloc[-1]["high"]
+                current_low = df.iloc[-1]["low"]
+
+                # 볼린저 밴드 상단 돌파
+                if current_high >= upper_band and not notified_upper:
+                    send_telegram("상단")
+                    notified_upper = True
+
+                # 볼린저 밴드 하단 돌파
+                if current_low <= lower_band and not notified_lower:
+                    send_telegram("하단")
+                    notified_lower = True
+
+        except Exception as e:
+            print(f"루프 내부 에러: {e}")
+
+        time.sleep(5)
+
+def keep_alive():
+    while True:
+        try:
+            requests.get("http://127.0.0.1:10000", timeout=5)
         except Exception:
             pass
         time.sleep(600)
 
-if __name__ == '__main__':
-    t_bot = threading.Thread(target=bot_loop, daemon=True)
-    t_bot.start()
+if __name__ == "__main__":
+    t1 = Thread(target=monitor)
+    t1.daemon = True
+    t1.start()
 
-    t_keep = threading.Thread(target=keep_alive, daemon=True)
-    t_keep.start()
+    t2 = Thread(target=keep_alive)
+    t2.daemon = True
+    t2.start()
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
