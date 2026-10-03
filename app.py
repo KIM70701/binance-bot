@@ -7,9 +7,10 @@ from flask import Flask
 
 # ----------------- 기본 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"   # 실시간 대응 시 "1m", 평소엔 "15m"으로 변경
+INTERVAL = "1m"   # 검증 완료 후 "15m"으로 변경
 BB_PERIOD = 45
 BB_STD = 2
+POLL_INTERVAL = 3  # 폴링 주기 3초 (최적 반응성 및 서버 부하 방어)
 
 # 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
@@ -54,10 +55,14 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 바이낸스 차트 동기화 가동)")
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 4단계 상태머신 가동)")
     last_candle_time = None
-    notified_upper = False
-    notified_lower = False
+    
+    # 캔들별 알림 발송 플래그 (1캔들당 각 1회 제한)
+    notified_upper_break = False
+    notified_upper_return = False
+    notified_lower_break = False
+    notified_lower_return = False
 
     while True:
         try:
@@ -65,13 +70,15 @@ def monitor():
             if df is not None and len(df) == BB_PERIOD:
                 current_candle_time = df.iloc[-1]["open_time"]
 
-                # 새 봉이 시작되면 알림 여부 초기화
+                # 새 봉 시작 감지 (방식 A: 봉 전환 시 모든 알림 상태 리셋)
                 if current_candle_time != last_candle_time:
                     last_candle_time = current_candle_time
-                    notified_upper = False
-                    notified_lower = False
+                    notified_upper_break = False
+                    notified_upper_return = False
+                    notified_lower_break = False
+                    notified_lower_return = False
 
-                # 바이낸스 차트 기본 볼밴 공식 (실시간 종가 포함 45개, 모표준편차 ddof=0)
+                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
                 ma = df["close"].mean()
                 std = df["close"].std(ddof=0)
                 upper_band = ma + (BB_STD * std)
@@ -79,26 +86,40 @@ def monitor():
 
                 current_high = df.iloc[-1]["high"]
                 current_low = df.iloc[-1]["low"]
+                current_close = df.iloc[-1]["close"]
 
-                # 볼린저 밴드 상단 돌파 시
-                if current_high >= upper_band and not notified_upper:
-                    send_telegram("상단")
-                    notified_upper = True
+                # ---------------- 상단 라인 판정 ----------------
+                # 1. 상단돌파: 캔들의 고가가 상단 밴드를 돌파/터치한 순간 (1회)
+                if current_high >= upper_band and not notified_upper_break:
+                    send_telegram("상단돌파")
+                    notified_upper_break = True
 
-                # 볼린저 밴드 하단 돌파 시
-                if current_low <= lower_band and not notified_lower:
-                    send_telegram("하단")
-                    notified_lower = True
+                # 2. 상단리턴: 돌파 발생 후 현재가가 상단 밴드 안쪽으로 회귀한 순간 (1회)
+                if notified_upper_break and not notified_upper_return and current_close < upper_band:
+                    send_telegram("상단리턴")
+                    notified_upper_return = True
+
+                # ---------------- 하단 라인 판정 ----------------
+                # 3. 하단돌파: 캔들의 저가가 하단 밴드를 돌파/터치한 순간 (1회)
+                if current_low <= lower_band and not notified_lower_break:
+                    send_telegram("하단돌파")
+                    notified_lower_break = True
+
+                # 4. 하단리턴: 돌파 발생 후 현재가가 하단 밴드 안쪽으로 회귀한 순간 (1회)
+                if notified_lower_break and not notified_lower_return and current_close > lower_band:
+                    send_telegram("하단리턴")
+                    notified_lower_return = True
 
         except Exception as e:
             print(f"루프 내부 에러: {e}")
 
-        time.sleep(5)
+        time.sleep(POLL_INTERVAL)
 
 def keep_alive():
+    port = os.environ.get("PORT", "10000")
     while True:
         try:
-            requests.get("http://127.0.0.1:10000", timeout=5)
+            requests.get(f"http://127.0.0.1:{port}", timeout=5)
         except Exception:
             pass
         time.sleep(600)
