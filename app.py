@@ -54,30 +54,17 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 4단계 상태머신 정상화 가동)")
-    last_candle_time = None
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 글로벌 상태추적 가동)")
     
-    # 캔들별 알림 발송 플래그
-    notified_upper_break = False
-    notified_upper_return = False
-    notified_lower_break = False
-    notified_lower_return = False
+    # 봉 전환과 무관하게 유지되는 글로벌 상태 (IN: 밴드 내부, OUT: 밴드 이탈)
+    upper_state = "IN"
+    lower_state = "IN"
 
     while True:
         try:
             df = get_klines()
-            # 데이터 수량이 BB_PERIOD 이상이면 최근 BB_PERIOD개만 안전하게 슬라이싱
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
-                current_candle_time = df_calc.iloc[-1]["open_time"]
-
-                # 새 봉 시작 감지 (방식 A: 봉 전환 시 모든 알림 상태 리셋)
-                if current_candle_time != last_candle_time:
-                    last_candle_time = current_candle_time
-                    notified_upper_break = False
-                    notified_upper_return = False
-                    notified_lower_break = False
-                    notified_lower_return = False
 
                 # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
                 ma = float(df_calc["close"].mean())
@@ -90,26 +77,26 @@ def monitor():
                 current_close = float(df_calc.iloc[-1]["close"])
 
                 # ---------------- 상단 라인 판정 ----------------
-                # 1. 상단돌파: 캔들 고가가 상단 밴드 이상인 경우 (1회)
-                if current_high >= upper_band and not notified_upper_break:
+                # 1. 상단돌파: 밴드 내부에 있다가 고가가 상단 밴드를 돌파한 순간
+                if upper_state == "IN" and current_high >= upper_band:
                     send_telegram("상단돌파")
-                    notified_upper_break = True
+                    upper_state = "OUT"
 
-                # 2. 상단리턴: 돌파 후 현재가가 상단 밴드 안쪽으로 회귀한 경우 (1회)
-                if notified_upper_break and not notified_upper_return and current_close < upper_band:
+                # 2. 상단리턴: 돌파 상태(OUT)에서 현재가가 상단 밴드 안쪽으로 확실히 들어온 순간
+                elif upper_state == "OUT" and current_close < upper_band:
                     send_telegram("상단리턴")
-                    notified_upper_return = True
+                    upper_state = "IN"
 
                 # ---------------- 하단 라인 판정 ----------------
-                # 3. 하단돌파: 캔들 저가가 하단 밴드 이하인 경우 (1회)
-                if current_low <= lower_band and not notified_lower_break:
+                # 3. 하단돌파: 밴드 내부에 있다가 저가가 하단 밴드를 돌파한 순간
+                if lower_state == "IN" and current_low <= lower_band:
                     send_telegram("하단돌파")
-                    notified_lower_break = True
+                    lower_state = "OUT"
 
-                # 4. 하단리턴: 돌파 후 현재가가 하단 밴드 안쪽으로 회귀한 경우 (1회)
-                if notified_lower_break and not notified_lower_return and current_close > lower_band:
+                # 4. 하단리턴: 돌파 상태(OUT)에서 현재가가 하단 밴드 안쪽으로 확실히 들어온 순간
+                elif lower_state == "OUT" and current_close > lower_band:
                     send_telegram("하단리턴")
-                    notified_lower_return = True
+                    lower_state = "IN"
 
         except Exception as e:
             print(f"루프 내부 에러: {e}")
