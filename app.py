@@ -7,7 +7,7 @@ from flask import Flask
 
 # ----------------- 기본 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "15m"   # 실시간 대응 시 "1m", 평소엔 "15m"으로 변경
+INTERVAL = "1m"   # 실시간 대응 시 "1m", 평소엔 "15m"으로 변경
 BB_PERIOD = 45
 BB_STD = 2
 
