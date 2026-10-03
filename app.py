@@ -10,7 +10,7 @@ from flask import Flask
 # ==========================================
 BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
 CHAT_ID = "5624306078"
-INTERVAL = "15m"
+INTERVAL = "1m"
 
 current_candle_time = None
 alerted_upper = False
