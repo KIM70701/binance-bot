@@ -10,7 +10,7 @@ SYMBOL = "ETHUSDT"
 INTERVAL = "1m"   # 검증 완료 후 "15m"으로 변경
 BB_PERIOD = 45
 BB_STD = 2
-POLL_INTERVAL = 3  # 폴링 주기 3초 (최적 반응성 및 서버 부하 방어)
+POLL_INTERVAL = 3  # 폴링 주기 3초
 
 # 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
@@ -32,7 +32,6 @@ def send_telegram(message):
         print(f"텔레그램 발송 오류: {e}")
 
 def get_klines():
-    # 실시간 미완성봉 포함 45개 데이터 조회
     url = "https://fapi.binance.com/fapi/v1/klines"
     params = {
         "symbol": SYMBOL,
@@ -55,10 +54,10 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 4단계 상태머신 가동)")
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 4단계 상태머신 정상화 가동)")
     last_candle_time = None
     
-    # 캔들별 알림 발송 플래그 (1캔들당 각 1회 제한)
+    # 캔들별 알림 발송 플래그
     notified_upper_break = False
     notified_upper_return = False
     notified_lower_break = False
@@ -67,8 +66,10 @@ def monitor():
     while True:
         try:
             df = get_klines()
-            if df is not None and len(df) == BB_PERIOD:
-                current_candle_time = df.iloc[-1]["open_time"]
+            # 데이터 수량이 BB_PERIOD 이상이면 최근 BB_PERIOD개만 안전하게 슬라이싱
+            if df is not None and len(df) >= BB_PERIOD:
+                df_calc = df.iloc[-BB_PERIOD:].copy()
+                current_candle_time = df_calc.iloc[-1]["open_time"]
 
                 # 새 봉 시작 감지 (방식 A: 봉 전환 시 모든 알림 상태 리셋)
                 if current_candle_time != last_candle_time:
@@ -79,33 +80,33 @@ def monitor():
                     notified_lower_return = False
 
                 # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
-                ma = df["close"].mean()
-                std = df["close"].std(ddof=0)
+                ma = float(df_calc["close"].mean())
+                std = float(df_calc["close"].std(ddof=0))
                 upper_band = ma + (BB_STD * std)
                 lower_band = ma - (BB_STD * std)
 
-                current_high = df.iloc[-1]["high"]
-                current_low = df.iloc[-1]["low"]
-                current_close = df.iloc[-1]["close"]
+                current_high = float(df_calc.iloc[-1]["high"])
+                current_low = float(df_calc.iloc[-1]["low"])
+                current_close = float(df_calc.iloc[-1]["close"])
 
                 # ---------------- 상단 라인 판정 ----------------
-                # 1. 상단돌파: 캔들의 고가가 상단 밴드를 돌파/터치한 순간 (1회)
+                # 1. 상단돌파: 캔들 고가가 상단 밴드 이상인 경우 (1회)
                 if current_high >= upper_band and not notified_upper_break:
                     send_telegram("상단돌파")
                     notified_upper_break = True
 
-                # 2. 상단리턴: 돌파 발생 후 현재가가 상단 밴드 안쪽으로 회귀한 순간 (1회)
+                # 2. 상단리턴: 돌파 후 현재가가 상단 밴드 안쪽으로 회귀한 경우 (1회)
                 if notified_upper_break and not notified_upper_return and current_close < upper_band:
                     send_telegram("상단리턴")
                     notified_upper_return = True
 
                 # ---------------- 하단 라인 판정 ----------------
-                # 3. 하단돌파: 캔들의 저가가 하단 밴드를 돌파/터치한 순간 (1회)
+                # 3. 하단돌파: 캔들 저가가 하단 밴드 이하인 경우 (1회)
                 if current_low <= lower_band and not notified_lower_break:
                     send_telegram("하단돌파")
                     notified_lower_break = True
 
-                # 4. 하단리턴: 돌파 발생 후 현재가가 하단 밴드 안쪽으로 회귀한 순간 (1회)
+                # 4. 하단리턴: 돌파 후 현재가가 하단 밴드 안쪽으로 회귀한 경우 (1회)
                 if notified_lower_break and not notified_lower_return and current_close > lower_band:
                     send_telegram("하단리턴")
                     notified_lower_return = True
