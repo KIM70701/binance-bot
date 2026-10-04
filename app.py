@@ -12,9 +12,9 @@ BB_PERIOD = 45      # 실전 운용 볼밴 기간 45
 BB_STD = 2          # 실전 운용 볼밴 승수 2
 POLL_INTERVAL = 3   # 3초 폴링 주기
 
-# 텔레그램 설정
-TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
-TELEGRAM_CHAT_ID = "5624306078"
+# 텔레그램 설정 (Render 환경변수에서 로드, 미설정 시 기본값 유지)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "5624306078")
 # --------------------------------------------------
 
 app = Flask(__name__)
@@ -24,6 +24,9 @@ def home():
     return "Bot is running!"
 
 def send_telegram(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("텔레그램 토큰 또는 Chat ID가 설정되지 않았습니다.")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
@@ -40,7 +43,6 @@ def get_klines():
     }
     try:
         res = requests.get(url, params=params, timeout=5)
-        # HTTP 상태 코드가 200이 아니거나 JSON 디코딩 실패 시 안전하게 제외
         if res.status_code != 200:
             print(f"바이낸스 API 응답 이상 (HTTP {res.status_code})")
             return None
@@ -67,7 +69,6 @@ def monitor():
     while True:
         try:
             df = get_klines()
-            # 데이터 수신에 성공했을 때만 판정 수행 (실패 시 직전 상태 보존)
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
 
@@ -118,7 +119,6 @@ def monitor():
         time.sleep(POLL_INTERVAL)
 
 def keep_alive():
-    # Flask 서버가 완전히 바인딩될 때까지 5초 대기
     time.sleep(5)
     port = os.environ.get("PORT", "10000")
     while True:
