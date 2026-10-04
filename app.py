@@ -40,6 +40,10 @@ def get_klines():
     }
     try:
         res = requests.get(url, params=params, timeout=5)
+        # HTTP 상태 코드가 200이 아니거나 JSON 디코딩 실패 시 안전하게 제외
+        if res.status_code != 200:
+            print(f"바이낸스 API 응답 이상 (HTTP {res.status_code})")
+            return None
         data = res.json()
         if not isinstance(data, list):
             return None
@@ -50,19 +54,20 @@ def get_klines():
         df["close"] = df["close"].astype(float)
         return df
     except Exception as e:
-        print(f"바이낸스 조회 에러: {e}")
+        print(f"바이낸스 조회/파싱 에러: {e}")
         return None
 
 def monitor():
     send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 단순 실시간 선통과 감지 가동)")
     
-    # 직전 루프(3초 전) 실시간 가격 위치 추적
+    # 직전 루프 실시간 가격 위치 추적
     prev_above_upper = None
     prev_below_lower = None
 
     while True:
         try:
             df = get_klines()
+            # 데이터 수신에 성공했을 때만 판정 수행 (실패 시 직전 상태 보존)
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
 
@@ -113,6 +118,8 @@ def monitor():
         time.sleep(POLL_INTERVAL)
 
 def keep_alive():
+    # Flask 서버가 완전히 바인딩될 때까지 5초 대기
+    time.sleep(5)
     port = os.environ.get("PORT", "10000")
     while True:
         try:
