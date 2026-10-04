@@ -7,10 +7,10 @@ from flask import Flask
 
 # ----------------- 기본 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"   # 검증 완료 후 "15m"으로 변경
-BB_PERIOD = 45
-BB_STD = 2
-POLL_INTERVAL = 3  # 폴링 주기 3초
+INTERVAL = "1m"      # 빠른 테스트용 1분봉 (검증 후 15m 변경 가능)
+BB_PERIOD = 10      # 빠른 테스트용 볼밴 기간 10 (기존 45)
+BB_STD = 1          # 빠른 테스트용 볼밴 승수 1 (기존 2)
+POLL_INTERVAL = 3   # 3초 폴링 주기 (최적 반응성 및 안전한 API 호출)
 
 # 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
@@ -54,11 +54,11 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} 글로벌 상태추적 가동)")
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 실시간 크로스 감지 가동)")
     
-    # 봉 전환과 무관하게 유지되는 글로벌 상태 (IN: 밴드 내부, OUT: 밴드 이탈)
-    upper_state = "IN"
-    lower_state = "IN"
+    # 직전 루프(3초 전)의 위치 상태 추적 (초기값 None으로 시작 시 자동 동기화)
+    prev_upper_outside = None
+    prev_lower_outside = None
 
     while True:
         try:
@@ -66,7 +66,7 @@ def monitor():
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
 
-                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
+                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함, 모표준편차 ddof=0)
                 ma = float(df_calc["close"].mean())
                 std = float(df_calc["close"].std(ddof=0))
                 upper_band = ma + (BB_STD * std)
@@ -76,27 +76,38 @@ def monitor():
                 current_low = float(df_calc.iloc[-1]["low"])
                 current_close = float(df_calc.iloc[-1]["close"])
 
-                # ---------------- 상단 라인 판정 ----------------
-                # 1. 상단돌파: 밴드 내부에 있다가 고가가 상단 밴드를 돌파한 순간
-                if upper_state == "IN" and current_high >= upper_band:
+                # 현재 3초 시점의 이탈 상태 판정
+                # 돌파는 순간 꼬리(High/Low) 반영, 리턴은 현재가(Close) 안착 기준
+                curr_upper_outside = (current_high >= upper_band)
+                curr_lower_outside = (current_low <= lower_band)
+
+                # 첫 실행 시 현재 위치를 즉각 동기화하여 침묵 락 방지
+                if prev_upper_outside is None:
+                    prev_upper_outside = (current_close >= upper_band)
+                if prev_lower_outside is None:
+                    prev_lower_outside = (current_close <= lower_band)
+
+                # ---------------- 상단 라인 실시간 크로스 판정 ----------------
+                # 1. 상단돌파: 직전에 안쪽에 있다가 현재 상단을 뚫고 나간 순간 (Cross-Over)
+                if not prev_upper_outside and curr_upper_outside:
                     send_telegram("상단돌파")
-                    upper_state = "OUT"
+                    prev_upper_outside = True
 
-                # 2. 상단리턴: 돌파 상태(OUT)에서 현재가가 상단 밴드 안쪽으로 확실히 들어온 순간
-                elif upper_state == "OUT" and current_close < upper_band:
+                # 2. 상단리턴: 직전에 바깥에 있다가 현재가가 상단 안쪽으로 내려앉은 순간 (Cross-Under)
+                elif prev_upper_outside and current_close < upper_band:
                     send_telegram("상단리턴")
-                    upper_state = "IN"
+                    prev_upper_outside = False
 
-                # ---------------- 하단 라인 판정 ----------------
-                # 3. 하단돌파: 밴드 내부에 있다가 저가가 하단 밴드를 돌파한 순간
-                if lower_state == "IN" and current_low <= lower_band:
+                # ---------------- 하단 라인 실시간 크로스 판정 ----------------
+                # 3. 하단돌파: 직전에 안쪽에 있다가 현재 하단을 뚫고 내려간 순간 (Cross-Under)
+                if not prev_lower_outside and curr_lower_outside:
                     send_telegram("하단돌파")
-                    lower_state = "OUT"
+                    prev_lower_outside = True
 
-                # 4. 하단리턴: 돌파 상태(OUT)에서 현재가가 하단 밴드 안쪽으로 확실히 들어온 순간
-                elif lower_state == "OUT" and current_close > lower_band:
+                # 4. 하단리턴: 직전에 바깥에 있다가 현재가가 하단 안쪽으로 올라선 순간 (Cross-Over)
+                elif prev_lower_outside and current_close > lower_band:
                     send_telegram("하단리턴")
-                    lower_state = "IN"
+                    prev_lower_outside = False
 
         except Exception as e:
             print(f"루프 내부 에러: {e}")
