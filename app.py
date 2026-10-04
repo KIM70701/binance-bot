@@ -12,9 +12,9 @@ BB_PERIOD = 45      # 실전 운용 볼밴 기간 45
 BB_STD = 2          # 실전 운용 볼밴 승수 2
 POLL_INTERVAL = 3   # 3초 폴링 주기
 
-# 텔레그램 설정 (Render 환경변수에서 로드, 미설정 시 기본값 유지)
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "5624306078")
+# 텔레그램 설정 (Render 환경변수에서만 순수 로드, 민감정보 하드코딩 엄격 배제)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # --------------------------------------------------
 
 app = Flask(__name__)
@@ -25,7 +25,7 @@ def home():
 
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("텔레그램 토큰 또는 Chat ID가 설정되지 않았습니다.")
+        print("경고: Render 환경변수에 TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 설정되지 않았습니다.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
