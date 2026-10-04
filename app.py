@@ -5,17 +5,14 @@ import pandas as pd
 from threading import Thread
 from flask import Flask
 
-# ----------------- 실전 운용 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "15m"     # 실전 운용 15분봉
-BB_PERIOD = 45      # 실전 운용 볼밴 기간 45
-BB_STD = 2          # 실전 운용 볼밴 승수 2
-POLL_INTERVAL = 3   # 3초 폴링 주기
+INTERVAL = "15m"
+BB_PERIOD = 45
+BB_STD = 2
+POLL_INTERVAL = 3
 
-# 텔레그램 설정 (Render 환경변수에서만 순수 로드, 민감정보 하드코딩 엄격 배제)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-# --------------------------------------------------
 
 app = Flask(__name__)
 
@@ -30,17 +27,15 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
-        requests.post(url, json=payload, timeout=5)
+        res = requests.post(url, json=payload, timeout=5)
+        if res.status_code != 200:
+            print(f"텔레그램 발송 실패 (HTTP {res.status_code}): {res.text}")
     except Exception as e:
-        print(f"텔레그램 발송 오류: {e}")
+        print(f"텔레그램 발송 예외: {e}")
 
 def get_klines():
     url = "https://fapi.binance.com/fapi/v1/klines"
-    params = {
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
-        "limit": BB_PERIOD
-    }
+    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": BB_PERIOD}
     try:
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200:
@@ -61,8 +56,6 @@ def get_klines():
 
 def monitor():
     send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 단순 실시간 선통과 감지 가동)")
-    
-    # 직전 루프 실시간 가격 위치 추적
     prev_above_upper = None
     prev_below_lower = None
 
@@ -71,44 +64,32 @@ def monitor():
             df = get_klines()
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
-
-                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
                 ma = float(df_calc["close"].mean())
                 std = float(df_calc["close"].std(ddof=0))
                 upper_band = ma + (BB_STD * std)
                 lower_band = ma - (BB_STD * std)
 
-                # 현재 3초 시점의 실시간 현재가
                 current_price = float(df_calc.iloc[-1]["close"])
-
-                # 현재 가격의 밴드 경계선 위치 판정
                 curr_above_upper = (current_price >= upper_band)
                 curr_below_lower = (current_price <= lower_band)
 
-                # 첫 시작 시 현재 위치 동기화
                 if prev_above_upper is None:
                     prev_above_upper = curr_above_upper
                 if prev_below_lower is None:
                     prev_below_lower = curr_below_lower
 
-                # ---------------- 상단 라인 실시간 교차 감지 ----------------
-                # 1. 상단돌파: 안쪽에 있다가 상단선 위로 뚫고 나간 순간
+                # 상단 라인 실시간 교차 감지
                 if not prev_above_upper and curr_above_upper:
                     send_telegram("상단돌파")
                     prev_above_upper = True
-
-                # 2. 상단리턴: 바깥에 있다가 상단선 아래로 뚫고 들어온 순간
                 elif prev_above_upper and not curr_above_upper:
                     send_telegram("상단리턴")
                     prev_above_upper = False
 
-                # ---------------- 하단 라인 실시간 교차 감지 ----------------
-                # 3. 하단돌파: 안쪽에 있다가 하단선 아래로 뚫고 내려간 순간
+                # 하단 라인 실시간 교차 감지
                 if not prev_below_lower and curr_below_lower:
                     send_telegram("하단돌파")
                     prev_below_lower = True
-
-                # 4. 하단리턴: 바깥에 있다가 하단선 위로 뚫고 올라온 순간
                 elif prev_below_lower and not curr_below_lower:
                     send_telegram("하단리턴")
                     prev_below_lower = False
