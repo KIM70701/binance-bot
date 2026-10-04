@@ -7,9 +7,9 @@ from flask import Flask
 
 # ----------------- 기본 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"      # 테스트용 1분봉 (검증 후 15m 변경 가능)
-BB_PERIOD = 15      # 테스트용 볼밴 기간 15
-BB_STD = 2          # 테스트용 볼밴 승수 2
+INTERVAL = "1m"      # 테스트용 1분봉 (검증 완료 후 15m 변경 가능)
+BB_PERIOD = 15      # 테스트용 볼밴 기간 15 (실전 시 45 변경 가능)
+BB_STD = 2          # 볼밴 승수 2
 POLL_INTERVAL = 3   # 3초 폴링 주기
 
 # 텔레그램 설정
@@ -41,6 +41,8 @@ def get_klines():
     try:
         res = requests.get(url, params=params, timeout=5)
         data = res.json()
+        if not isinstance(data, list):
+            return None
         df = pd.DataFrame(data, columns=[
             "open_time", "open", "high", "low", "close", "volume",
             "close_time", "q_vol", "trades", "tb_base", "tb_quote", "ignore"
@@ -52,11 +54,11 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 실시간 현재가 크로스 감지 가동)")
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 단순 실시간 선통과 감지 가동)")
     
-    # 직전 루프(3초 전)의 실시간 현재가 이탈 상태 추적
-    prev_upper_outside = None
-    prev_lower_outside = None
+    # 직전 루프(3초 전) 실시간 가격 위치 추적
+    prev_above_upper = None
+    prev_below_lower = None
 
     while True:
         try:
@@ -70,42 +72,43 @@ def monitor():
                 upper_band = ma + (BB_STD * std)
                 lower_band = ma - (BB_STD * std)
 
-                # 꼬리 잔상 왜곡 방지를 위해 순수 실시간 현재가(Close)로만 판정
-                current_close = float(df_calc.iloc[-1]["close"])
+                # 현재 3초 시점의 실시간 현재가
+                current_price = float(df_calc.iloc[-1]["close"])
 
-                curr_upper_outside = (current_close >= upper_band)
-                curr_lower_outside = (current_close <= lower_band)
+                # 현재 가격의 밴드 경계선 위치 판정
+                curr_above_upper = (current_price >= upper_band)
+                curr_below_lower = (current_price <= lower_band)
 
-                # 첫 실행 시 현재 가격 위치와 동기화
-                if prev_upper_outside is None:
-                    prev_upper_outside = curr_upper_outside
-                if prev_lower_outside is None:
-                    prev_lower_outside = curr_lower_outside
+                # 첫 시작 시 현재 위치 동기화
+                if prev_above_upper is None:
+                    prev_above_upper = curr_above_upper
+                if prev_below_lower is None:
+                    prev_below_lower = curr_below_lower
 
-                # ---------------- 상단 라인 실시간 크로스 판정 ----------------
-                # 1. 상단돌파: 직전에 안쪽에 있다가 현재가가 상단을 뚫고 올라선 순간
-                if not prev_upper_outside and curr_upper_outside:
+                # ---------------- 상단 라인 실시간 교차 감지 ----------------
+                # 1. 상단돌파: 안쪽에 있다가 상단선 위로 뚫고 나간 순간
+                if not prev_above_upper and curr_above_upper:
                     send_telegram("상단돌파")
-                    prev_upper_outside = True
+                    prev_above_upper = True
 
-                # 2. 상단리턴: 직전에 바깥에 있다가 현재가가 상단 안쪽으로 내려앉은 순간
-                elif prev_upper_outside and not curr_upper_outside:
+                # 2. 상단리턴: 바깥에 있다가 상단선 아래로 뚫고 들어온 순간
+                elif prev_above_upper and not curr_above_upper:
                     send_telegram("상단리턴")
-                    prev_upper_outside = False
+                    prev_above_upper = False
 
-                # ---------------- 하단 라인 실시간 크로스 판정 ----------------
-                # 3. 하단돌파: 직전에 안쪽에 있다가 현재가가 하단을 뚫고 내려간 순간
-                if not prev_lower_outside and curr_lower_outside:
+                # ---------------- 하단 라인 실시간 교차 감지 ----------------
+                # 3. 하단돌파: 안쪽에 있다가 하단선 아래로 뚫고 내려간 순간
+                if not prev_below_lower and curr_below_lower:
                     send_telegram("하단돌파")
-                    prev_lower_outside = True
+                    prev_below_lower = True
 
-                # 4. 하단리턴: 직전에 바깥에 있다가 현재가가 하단 안쪽으로 올라선 순간
-                elif prev_lower_outside and not curr_lower_outside:
+                # 4. 하단리턴: 바깥에 있다가 하단선 위로 뚫고 올라온 순간
+                elif prev_below_lower and not curr_below_lower:
                     send_telegram("하단리턴")
-                    prev_lower_outside = False
+                    prev_below_lower = False
 
         except Exception as e:
-            print(f"루프 내부 에러: {e}")
+            print(f"모니터링 루프 에러: {e}")
 
         time.sleep(POLL_INTERVAL)
 
