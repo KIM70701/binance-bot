@@ -35,14 +35,16 @@ def send_telegram(message):
 
 def get_klines():
     url = "https://fapi.binance.com/fapi/v1/klines"
-    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": BB_PERIOD}
+    # 페이징 누락 방지를 위해 limit을 100으로 여유 있게 요청
+    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": 100}
     try:
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200:
-            print(f"바이낸스 API 응답 이상 (HTTP {res.status_code})")
+            print(f"바이낸스 API 응답 이상 (HTTP {res.status_code}): {res.text}")
             return None
         data = res.json()
         if not isinstance(data, list):
+            print("바이낸스 응답 형식 오류: 리스트 형태가 아닙니다.")
             return None
         df = pd.DataFrame(data, columns=[
             "open_time", "open", "high", "low", "close", "volume",
@@ -55,6 +57,7 @@ def get_klines():
         return None
 
 def monitor():
+    # 기동 즉시 시작 알림 발송 (통신 검증)
     send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 단순 실시간 선통과 감지 가동)")
     prev_above_upper = None
     prev_below_lower = None
@@ -80,18 +83,18 @@ def monitor():
 
                 # 상단 라인 실시간 교차 감지
                 if not prev_above_upper and curr_above_upper:
-                    send_telegram("상단돌파")
+                    send_telegram(f"[{SYMBOL}] 상단돌파 | 현재가: {current_price} >= 상단: {upper_band:.2f}")
                     prev_above_upper = True
                 elif prev_above_upper and not curr_above_upper:
-                    send_telegram("상단리턴")
+                    send_telegram(f"[{SYMBOL}] 상단리턴 | 현재가: {current_price} < 상단: {upper_band:.2f}")
                     prev_above_upper = False
 
                 # 하단 라인 실시간 교차 감지
                 if not prev_below_lower and curr_below_lower:
-                    send_telegram("하단돌파")
+                    send_telegram(f"[{SYMBOL}] 하단돌파 | 현재가: {current_price} <= 하단: {lower_band:.2f}")
                     prev_below_lower = True
                 elif prev_below_lower and not curr_below_lower:
-                    send_telegram("하단리턴")
+                    send_telegram(f"[{SYMBOL}] 하단리턴 | 현재가: {current_price} > 하단: {lower_band:.2f}")
                     prev_below_lower = False
 
         except Exception as e:
