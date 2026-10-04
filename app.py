@@ -7,10 +7,10 @@ from flask import Flask
 
 # ----------------- 기본 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"      # 빠른 테스트용 1분봉 (검증 후 15m 변경 가능)
-BB_PERIOD = 10      # 빠른 테스트용 볼밴 기간 10 (기존 45)
-BB_STD = 1          # 빠른 테스트용 볼밴 승수 1 (기존 2)
-POLL_INTERVAL = 3   # 3초 폴링 주기 (최적 반응성 및 안전한 API 호출)
+INTERVAL = "1m"      # 테스트용 1분봉 (검증 후 15m 변경 가능)
+BB_PERIOD = 15      # 테스트용 볼밴 기간 15
+BB_STD = 2          # 테스트용 볼밴 승수 2
+POLL_INTERVAL = 3   # 3초 폴링 주기
 
 # 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
@@ -45,8 +45,6 @@ def get_klines():
             "open_time", "open", "high", "low", "close", "volume",
             "close_time", "q_vol", "trades", "tb_base", "tb_quote", "ignore"
         ])
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
         df["close"] = df["close"].astype(float)
         return df
     except Exception as e:
@@ -54,9 +52,9 @@ def get_klines():
         return None
 
 def monitor():
-    send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 실시간 크로스 감지 가동)")
+    send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 실시간 현재가 크로스 감지 가동)")
     
-    # 직전 루프(3초 전)의 위치 상태 추적 (초기값 None으로 시작 시 자동 동기화)
+    # 직전 루프(3초 전)의 실시간 현재가 이탈 상태 추적
     prev_upper_outside = None
     prev_lower_outside = None
 
@@ -72,40 +70,37 @@ def monitor():
                 upper_band = ma + (BB_STD * std)
                 lower_band = ma - (BB_STD * std)
 
-                current_high = float(df_calc.iloc[-1]["high"])
-                current_low = float(df_calc.iloc[-1]["low"])
+                # 꼬리 잔상 왜곡 방지를 위해 순수 실시간 현재가(Close)로만 판정
                 current_close = float(df_calc.iloc[-1]["close"])
 
-                # 현재 3초 시점의 이탈 상태 판정
-                # 돌파는 순간 꼬리(High/Low) 반영, 리턴은 현재가(Close) 안착 기준
-                curr_upper_outside = (current_high >= upper_band)
-                curr_lower_outside = (current_low <= lower_band)
+                curr_upper_outside = (current_close >= upper_band)
+                curr_lower_outside = (current_close <= lower_band)
 
-                # 첫 실행 시 현재 위치를 즉각 동기화하여 침묵 락 방지
+                # 첫 실행 시 현재 가격 위치와 동기화
                 if prev_upper_outside is None:
-                    prev_upper_outside = (current_close >= upper_band)
+                    prev_upper_outside = curr_upper_outside
                 if prev_lower_outside is None:
-                    prev_lower_outside = (current_close <= lower_band)
+                    prev_lower_outside = curr_lower_outside
 
                 # ---------------- 상단 라인 실시간 크로스 판정 ----------------
-                # 1. 상단돌파: 직전에 안쪽에 있다가 현재 상단을 뚫고 나간 순간 (Cross-Over)
+                # 1. 상단돌파: 직전에 안쪽에 있다가 현재가가 상단을 뚫고 올라선 순간
                 if not prev_upper_outside and curr_upper_outside:
                     send_telegram("상단돌파")
                     prev_upper_outside = True
 
-                # 2. 상단리턴: 직전에 바깥에 있다가 현재가가 상단 안쪽으로 내려앉은 순간 (Cross-Under)
-                elif prev_upper_outside and current_close < upper_band:
+                # 2. 상단리턴: 직전에 바깥에 있다가 현재가가 상단 안쪽으로 내려앉은 순간
+                elif prev_upper_outside and not curr_upper_outside:
                     send_telegram("상단리턴")
                     prev_upper_outside = False
 
                 # ---------------- 하단 라인 실시간 크로스 판정 ----------------
-                # 3. 하단돌파: 직전에 안쪽에 있다가 현재 하단을 뚫고 내려간 순간 (Cross-Under)
+                # 3. 하단돌파: 직전에 안쪽에 있다가 현재가가 하단을 뚫고 내려간 순간
                 if not prev_lower_outside and curr_lower_outside:
                     send_telegram("하단돌파")
                     prev_lower_outside = True
 
-                # 4. 하단리턴: 직전에 바깥에 있다가 현재가가 하단 안쪽으로 올라선 순간 (Cross-Over)
-                elif prev_lower_outside and current_close > lower_band:
+                # 4. 하단리턴: 직전에 바깥에 있다가 현재가가 하단 안쪽으로 올라선 순간
+                elif prev_lower_outside and not curr_lower_outside:
                     send_telegram("하단리턴")
                     prev_lower_outside = False
 
