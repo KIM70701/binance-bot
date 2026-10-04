@@ -5,17 +5,17 @@ import pandas as pd
 from threading import Thread
 from flask import Flask
 
-# ----------------- 기본 설정 -----------------
+# ----------------- 실전 운용 설정 -----------------
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"      # 테스트용 1분봉 (검증 완료 후 15m 변경 가능)
-BB_PERIOD = 15      # 테스트용 볼밴 기간 15 (실전 시 45 변경 가능)
-BB_STD = 2          # 볼밴 승수 2
+INTERVAL = "15m"     # 실전 운용 15분봉
+BB_PERIOD = 45      # 실전 운용 볼밴 기간 45
+BB_STD = 2          # 실전 운용 볼밴 승수 2
 POLL_INTERVAL = 3   # 3초 폴링 주기
 
 # 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8866848171:AAH0Jjh18W-XA2eRQIsOG0WFS4YMxmp7ICc"
 TELEGRAM_CHAT_ID = "5624306078"
-# ---------------------------------------------
+# --------------------------------------------------
 
 app = Flask(__name__)
 
@@ -66,7 +66,7 @@ def monitor():
             if df is not None and len(df) >= BB_PERIOD:
                 df_calc = df.iloc[-BB_PERIOD:].copy()
 
-                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함, 모표준편차 ddof=0)
+                # 바이낸스 공식 볼린저 밴드 (실시간 종가 포함 45봉, 모표준편차 ddof=0)
                 ma = float(df_calc["close"].mean())
                 std = float(df_calc["close"].std(ddof=0))
                 upper_band = ma + (BB_STD * std)
