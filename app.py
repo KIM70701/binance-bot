@@ -10,6 +10,7 @@ INTERVAL = "15m"
 BB_PERIOD = 45
 BB_STD = 2
 POLL_INTERVAL = 3
+ALERT_COOLDOWN = 60
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -60,20 +61,17 @@ def monitor():
     send_telegram(f"시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 단순 실시간 선통과 감지 가동)")
     prev_above_upper = None
     prev_below_lower = None
-    last_alerted_candle_time = None
+    last_alert_times = {
+        "상단돌파": 0.0,
+        "상단리턴": 0.0,
+        "하단돌파": 0.0,
+        "하단리턴": 0.0
+    }
 
     while True:
         try:
             df = get_klines()
             if df is not None and len(df) >= BB_PERIOD:
-                current_candle_time = df.iloc[-1]["open_time"]
-                
-                # 새 캔들 시작 시 1회 제한 플래그 리셋
-                if last_alerted_candle_time != current_candle_time:
-                    candle_alert_sent = False
-                else:
-                    candle_alert_sent = True
-
                 df_calc = df.iloc[-BB_PERIOD:].copy()
                 ma = float(df_calc["close"].mean())
                 std = float(df_calc["close"].std(ddof=0))
@@ -89,35 +87,33 @@ def monitor():
                 if prev_below_lower is None:
                     prev_below_lower = curr_below_lower
 
+                now = time.time()
+
                 # 상단 라인 실시간 교차 감지
                 if not prev_above_upper and curr_above_upper:
-                    if not candle_alert_sent:
+                    if now - last_alert_times["상단돌파"] >= ALERT_COOLDOWN:
                         send_telegram("상단돌파")
-                        last_alerted_candle_time = current_candle_time
-                        candle_alert_sent = True
+                        last_alert_times["상단돌파"] = now
                     print(f"[상단돌파] 현재가: {current_price} >= 상단: {upper_band:.2f}")
                     prev_above_upper = True
                 elif prev_above_upper and not curr_above_upper:
-                    if not candle_alert_sent:
+                    if now - last_alert_times["상단리턴"] >= ALERT_COOLDOWN:
                         send_telegram("상단리턴")
-                        last_alerted_candle_time = current_candle_time
-                        candle_alert_sent = True
+                        last_alert_times["상단리턴"] = now
                     print(f"[상단리턴] 현재가: {current_price} < 상단: {upper_band:.2f}")
                     prev_above_upper = False
 
                 # 하단 라인 실시간 교차 감지
                 if not prev_below_lower and curr_below_lower:
-                    if not candle_alert_sent:
+                    if now - last_alert_times["하단돌파"] >= ALERT_COOLDOWN:
                         send_telegram("하단돌파")
-                        last_alerted_candle_time = current_candle_time
-                        candle_alert_sent = True
+                        last_alert_times["하단돌파"] = now
                     print(f"[하단돌파] 현재가: {current_price} <= 하단: {lower_band:.2f}")
                     prev_below_lower = True
                 elif prev_below_lower and not curr_below_lower:
-                    if not candle_alert_sent:
+                    if now - last_alert_times["하단리턴"] >= ALERT_COOLDOWN:
                         send_telegram("하단리턴")
-                        last_alerted_candle_time = current_candle_time
-                        candle_alert_sent = True
+                        last_alert_times["하단리턴"] = now
                     print(f"[하단리턴] 현재가: {current_price} > 하단: {lower_band:.2f}")
                     prev_below_lower = False
 
