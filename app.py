@@ -29,7 +29,7 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 app = Flask(__name__)
 
 # ==========================================
-# 전역 상태 변수 (워치독 제거 완료)
+# 전역 상태 변수
 # ==========================================
 df_klines = pd.DataFrame()
 prev_above_upper = None
@@ -53,7 +53,7 @@ last_telegram_update_id = None
 # ==========================================
 @app.route("/")
 def home():
-    return "WebSocket Bot is running! (V11.22 - 5 Engines)"
+    return "WebSocket Bot is running! (V11.23 - 5 Engines with Heartbeat)"
 
 def send_telegram(message):
     """단방향 메시지 발송 함수 (블로킹 방지 Timeout 5초)"""
@@ -209,7 +209,7 @@ def on_close(ws, close_status_code, close_msg):
 
 def on_open(ws):
     print("WebSocket 연결 성공. 실시간 스트림 수신 시작...")
-    send_telegram(f"🚀 V11.22 가동 시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 감시 중)")
+    send_telegram(f"🚀 V11.23 가동 시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 감시 중)")
 
 def start_websocket():
     global df_klines
@@ -233,7 +233,10 @@ def start_websocket():
             on_close=on_close
         )
         ws.on_open = on_open
-        ws.run_forever()
+        
+        # [핵심 교정 로직] 좀비 소켓(Deadlock) 방지용 내장 심박수(Ping/Pong) 센서 가동
+        # 60초마다 핑을 쏘고 10초 내 무응답 시 즉시 소켓 파괴 후 재연결 루프 진입
+        ws.run_forever(ping_interval=60, ping_timeout=10)
         
         # [엔진 2] 웹소켓 끊김 시 지수 백오프(Exponential Backoff)
         print(f"웹소켓 드랍. {backoff_time}초 후 재접속...")
