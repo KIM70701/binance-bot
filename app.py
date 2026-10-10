@@ -10,21 +10,27 @@ from flask import Flask
 from datetime import datetime
 import pytz
 
-# --- [불변 헌법] 지표 및 시스템 기본 명세 ---
+# ==========================================
+# [불변 헌법] 지표 및 시스템 기본 명세
+# ==========================================
 SYMBOL = "ETHUSDT"
 INTERVAL = "15m"
 BB_PERIOD = 45
 BB_STD = 2
 ALERT_COOLDOWN = 60
 
-# --- [절대 규칙] 환경변수 완벽 격리 ---
+# ==========================================
+# [절대 규칙] 환경변수 완벽 격리 (Zero Hardcoding)
+# ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 app = Flask(__name__)
 
-# --- 전역 상태 변수 ---
+# ==========================================
+# 전역 상태 변수 (워치독 제거 완료)
+# ==========================================
 df_klines = pd.DataFrame()
 prev_above_upper = None
 prev_below_lower = None
@@ -34,23 +40,20 @@ last_alert_times = {
     "하단돌파": 0.0,
     "하단리턴": 0.0
 }
-
-# --- [엔진 3 & 5] 상태 추적용 전역 변수 ---
-last_message_time = time.time() # 워치독 기준 타임스탬프
 daily_stats = {
     "상단돌파": 0,
     "상단리턴": 0,
     "하단돌파": 0,
     "하단리턴": 0
 }
-last_telegram_update_id = None # 텔레그램 리모컨(Offset) 관리
+last_telegram_update_id = None
 
 # ==========================================
 # 1. 공통 유틸리티 및 텔레그램 함수
 # ==========================================
 @app.route("/")
 def home():
-    return "WebSocket Bot is running! (V11.22)"
+    return "WebSocket Bot is running! (V11.22 - 5 Engines)"
 
 def send_telegram(message):
     """단방향 메시지 발송 함수 (블로킹 방지 Timeout 5초)"""
@@ -92,8 +95,8 @@ def fetch_initial_klines():
             msg = f"🚨 [IP 밴 방어] 바이낸스 API 제한(HTTP {res.status_code}). {wait_seconds}초 동안 안전 동면(Sleep) 진입합니다."
             print(msg)
             send_telegram(msg)
-            time.sleep(wait_seconds)
-            return None # 동면 종료 후 메인 루프에서 재시도 유도
+            time.sleep(wait_seconds) # 해당 스레드만 밴 해제 시간까지 완벽히 대기
+            return None 
             
         if res.status_code != 200:
             print(f"초기 캔들 로드 실패 (HTTP {res.status_code}): {res.text}")
@@ -116,16 +119,12 @@ def fetch_initial_klines():
         return None
 
 # ==========================================
-# 3. 핵심 지표 판정 엔진 (불변 헌법 유지)
+# 3. 핵심 지표 판정 엔진 (불변 헌법 100% 보존)
 # ==========================================
 def process_websocket_message(message):
-    global df_klines, prev_above_upper, prev_below_lower, last_alert_times
-    global last_message_time, daily_stats
+    global df_klines, prev_above_upper, prev_below_lower, last_alert_times, daily_stats
 
     try:
-        # [엔진 3 워치독] 시세 수신 시 타임스탬프 갱신
-        last_message_time = time.time()
-        
         data = json.loads(message)
         kline = data.get("k", {})
         if not kline:
@@ -137,7 +136,7 @@ def process_websocket_message(message):
         if df_klines.empty:
             return
 
-        # 캔들 병합 및 메모리 누수 방지 슬라이싱
+        # 캔들 갱신 및 슬라이싱
         last_index = df_klines.index[-1]
         if current_time == df_klines.at[last_index, "open_time"]:
             df_klines.at[last_index, "close"] = current_price
@@ -148,6 +147,7 @@ def process_websocket_message(message):
                 df_klines = df_klines.iloc[-100:].reset_index(drop=True)
 
         if len(df_klines) >= BB_PERIOD:
+            # 연산 범위 및 모표준편차 적용 (바이낸스 수식 일치)
             df_calc = df_klines.iloc[-BB_PERIOD:].copy()
             ma = float(df_calc["close"].mean())
             std = float(df_calc["close"].std(ddof=0))
@@ -212,7 +212,7 @@ def on_open(ws):
     send_telegram(f"🚀 V11.22 가동 시작 ({SYMBOL} {INTERVAL} BB({BB_PERIOD},{BB_STD}) 감시 중)")
 
 def start_websocket():
-    global df_klines, last_message_time
+    global df_klines
     
     df_klines = fetch_initial_klines()
     while df_klines is None or df_klines.empty:
@@ -226,8 +226,6 @@ def start_websocket():
     backoff_time = 5
     
     while True:
-        last_message_time = time.time()
-        
         ws = websocket.WebSocketApp(
             stream_url,
             on_message=on_message,
@@ -237,31 +235,22 @@ def start_websocket():
         ws.on_open = on_open
         ws.run_forever()
         
-        # [엔진 2] 웹소켓 끊김 시 지수 백오프(Exponential Backoff) 적용
+        # [엔진 2] 웹소켓 끊김 시 지수 백오프(Exponential Backoff)
         print(f"웹소켓 드랍. {backoff_time}초 후 재접속...")
         time.sleep(backoff_time)
-        backoff_time = min(backoff_time * 2, 60) # 5 -> 10 -> 20 -> 최대 60초
+        backoff_time = min(backoff_time * 2, 60)
 
 # ==========================================
 # 4. 백그라운드 관리 스레드 (상태 가시성 팩)
 # ==========================================
 def keep_alive():
-    """외부 핑, 워치독, 자정 브리핑 통합 관리 스레드"""
-    global last_message_time, daily_stats
+    """[엔진 5] 자정 통계 브리핑 및 외부 핑 통신망"""
+    global daily_stats
     time.sleep(5)
     last_date = datetime.now(pytz.timezone('Asia/Seoul')).date()
     
     while True:
-        now = time.time()
-        
-        # [엔진 3] 워치독: 60초간 패킷 수신이 없으면 데드락 감지 후 재시작 유도
-        if now - last_message_time > 60:
-            msg = "🚨 [Watchdog] 60초간 시세 데이터 없음 (데드락). 프로세스를 강제 재시작합니다."
-            print(msg)
-            send_telegram(msg)
-            os._exit(1)
-            
-        # [엔진 5] 자정 통계 브리핑 롤오버 (한국 시간 기준)
+        # 자정 롤오버 브리핑 (한국 시간 기준)
         current_kst = datetime.now(pytz.timezone('Asia/Seoul'))
         if current_kst.date() > last_date:
             report = (
@@ -273,12 +262,11 @@ def keep_alive():
                 f"- 하단리턴: {daily_stats['하단리턴']}"
             )
             send_telegram(report)
-            # 통계 초기화 및 날짜 갱신
             for k in daily_stats:
                 daily_stats[k] = 0
             last_date = current_kst.date()
 
-        # 기존 Render Sleep 방지용 외부 핑
+        # Render Sleep 방지용 외부 핑
         if RENDER_EXTERNAL_URL:
             try:
                 res = requests.get(RENDER_EXTERNAL_URL, timeout=10)
@@ -286,10 +274,10 @@ def keep_alive():
             except Exception as e:
                 print(f"[Keep-Alive] 핑 실패: {e}")
                 
-        time.sleep(600) # 10분 주기 루프
+        time.sleep(600)
 
 def telegram_polling_thread():
-    """[엔진 4] 양방향 리모컨 (/status) 처리 스레드"""
+    """[엔진 4] 양방향 리모컨 (/status) 처리 데몬"""
     global last_telegram_update_id, df_klines
     if not TELEGRAM_BOT_TOKEN:
         return
@@ -311,10 +299,9 @@ def telegram_polling_thread():
                     
                     if msg_text == "/status":
                         if df_klines.empty or len(df_klines) < BB_PERIOD:
-                            send_telegram("ℹ️ 시스템 가동 중이나 캔들 데이터가 아직 부족합니다.")
+                            send_telegram("ℹ️ 시스템 가동 중이나 캔들 데이터가 아직 부족합니다. (IP 밴 대기 중일 수 있습니다)")
                             continue
                             
-                        # 상태 요청 시점에 즉석에서 지표 연산
                         df_calc = df_klines.iloc[-BB_PERIOD:]
                         ma = float(df_calc["close"].mean())
                         std = float(df_calc["close"].std(ddof=0))
@@ -327,13 +314,13 @@ def telegram_polling_thread():
                             f"현재가: {curr_price}\n"
                             f"상단 밴드: {up:.2f}\n"
                             f"하단 밴드: {dn:.2f}\n"
-                            f"데이터 안정성: {len(df_klines)} 캔들 확보"
+                            f"데이터 확보: {len(df_klines)} 캔들"
                         )
                         send_telegram(status_msg)
         except Exception as e:
             print(f"텔레그램 폴링 에러: {e}")
             
-        time.sleep(2) # 2초 대기 후 재요청 (부하 최소화)
+        time.sleep(2)
 
 # ==========================================
 # 5. 애플리케이션 진입점
