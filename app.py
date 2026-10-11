@@ -9,10 +9,10 @@ from threading import Thread
 from flask import Flask
 
 # ==========================================
-# 기본 설정
+# 기본 설정 (1분봉 테스트용)
 # ==========================================
 SYMBOL = "ETHUSDT"
-INTERVAL = "15m"
+INTERVAL = "1m"
 BB_PERIOD = 45
 BB_STD = 2
 ALERT_COOLDOWN = 60
@@ -38,7 +38,7 @@ last_alert_times = {
 
 @app.route("/")
 def home():
-    return "Bot is running! (V11.26 엑스레이 엔진 가동 중)"
+    return "Bot is running! (V11.27 1분봉 엑스레이 엔진 가동 중)"
 
 def log(msg):
     print(msg, flush=True)
@@ -169,7 +169,7 @@ def start_websocket():
                 on_error=lambda ws, err: log(f"웹소켓 네트워크 에러: {err}"),
                 on_close=lambda ws, status_code, msg: log(f"웹소켓 닫힘 (Code: {status_code})")
             )
-            ws.on_open = lambda ws: (log("웹소켓 연결 성공! 실시간 감시 시작"), send_telegram(f"🚀 봇 V11.26(X-Ray 탑재) 가동 시작"))
+            ws.on_open = lambda ws: (log("웹소켓 연결 성공! 실시간 감시 시작"), send_telegram(f"🚀 봇 V11.27(1분봉 테스트+X-Ray) 가동 시작"))
             ws.run_forever(ping_interval=60, ping_timeout=10)
         except Exception as e:
             log(f"웹소켓 루프 치명적 에러 (스레드 보호됨): {e}")
