@@ -24,10 +24,11 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 app = Flask(__name__)
 
 # ==========================================
-# 봇 상태 관리 (초간단/무결점 구조)
+# 봇 상태 관리 (엑스레이 추적기 추가)
 # ==========================================
-klines_list = []      # 캔들 데이터가 쌓일 리스트
-current_state = "INSIDE"  # 3가지 상태: INSIDE, ABOVE_UPPER, BELOW_LOWER
+klines_list = []      
+current_state = "INSIDE"  
+last_xray_time = 0.0  # 엑스레이 로그용 타이머
 last_alert_times = {
     "상단돌파": 0.0,
     "상단리턴": 0.0,
@@ -35,12 +36,10 @@ last_alert_times = {
     "하단리턴": 0.0
 }
 
-# Render Sleep 방지용 웹서버 라우트
 @app.route("/")
 def home():
-    return "Bot is running! (새로운 순정 엔진 가동 중)"
+    return "Bot is running! (V11.26 엑스레이 엔진 가동 중)"
 
-# 강제 출력 로그 함수 (Render 로그 창에서 실시간으로 즉시 보이게 함)
 def log(msg):
     print(msg, flush=True)
 
@@ -53,7 +52,6 @@ def send_telegram(message):
     except Exception as e:
         log(f"텔레그램 발송 에러: {e}")
 
-# 인프라 재시작 감지
 def handle_sigterm(signum, frame):
     log("🔄 [시스템] 서버 재시작 감지됨.")
     os._exit(0)
@@ -75,17 +73,16 @@ def fetch_initial_klines():
             return []
         
         data = res.json()
-        # [ {시간, 종가}, {시간, 종가} ... ] 형태로 가볍게 저장
         return [{"t": int(x[0]), "c": float(x[4])} for x in data]
     except Exception as e:
         log(f"초기 데이터 로드 에러: {e}")
         return []
 
 # ==========================================
-# 핵심 판정 엔진 (웹소켓 데이터 수신 시마다 작동)
+# 핵심 판정 엔진 (엑스레이 실시간 투시 적용)
 # ==========================================
 def process_websocket_message(message):
-    global klines_list, current_state, last_alert_times
+    global klines_list, current_state, last_alert_times, last_xray_time
     try:
         data = json.loads(message)
         k = data.get("k")
@@ -98,7 +95,6 @@ def process_websocket_message(message):
         if not klines_list:
             return
         
-        # 1. 캔들 리스트 최신화 (안전한 리스트 방식)
         last_t = klines_list[-1]["t"]
         if curr_t == last_t:
             klines_list[-1]["c"] = curr_c
@@ -107,7 +103,6 @@ def process_websocket_message(message):
             if len(klines_list) > 100:
                 klines_list.pop(0)
                 
-        # 2. 볼린저 밴드 계산 (최근 45개만 짤라서 계산)
         if len(klines_list) >= BB_PERIOD:
             recent_45 = klines_list[-BB_PERIOD:]
             df = pd.DataFrame(recent_45)
@@ -119,7 +114,11 @@ def process_websocket_message(message):
             now = time.time()
             alert_msg = None
             
-            # 3. 직관적인 3단계 상태 돌파 판정
+            # [엑스레이 시야 확보] 60초마다 무조건 내부 수치 로그 강제 출력
+            if now - last_xray_time >= 60:
+                log(f"🔎 [X-Ray] 현재가: {curr_c} | 상단: {up:.2f} | 하단: {dn:.2f} | 상태: {current_state}")
+                last_xray_time = now
+            
             if curr_c >= up and current_state != "ABOVE_UPPER":
                 current_state = "ABOVE_UPPER"
                 alert_msg = "상단돌파"
@@ -134,7 +133,6 @@ def process_websocket_message(message):
                     current_state = "INSIDE"
                     alert_msg = "하단리턴"
                     
-            # 4. 알림 발송 및 쿨다운 체크
             if alert_msg:
                 if now - last_alert_times[alert_msg] >= ALERT_COOLDOWN:
                     log(f"🎯 [{alert_msg}] 가격: {curr_c} / 밴드상단: {up:.2f} / 하단: {dn:.2f}")
@@ -171,7 +169,7 @@ def start_websocket():
                 on_error=lambda ws, err: log(f"웹소켓 네트워크 에러: {err}"),
                 on_close=lambda ws, status_code, msg: log(f"웹소켓 닫힘 (Code: {status_code})")
             )
-            ws.on_open = lambda ws: (log("웹소켓 연결 성공! 실시간 감시 시작"), send_telegram(f"🚀 봇 새 엔진으로 가동 시작 ({SYMBOL} 15m BB 감시)"))
+            ws.on_open = lambda ws: (log("웹소켓 연결 성공! 실시간 감시 시작"), send_telegram(f"🚀 봇 V11.26(X-Ray 탑재) 가동 시작"))
             ws.run_forever(ping_interval=60, ping_timeout=10)
         except Exception as e:
             log(f"웹소켓 루프 치명적 에러 (스레드 보호됨): {e}")
@@ -194,9 +192,6 @@ def keep_alive():
                 log(f"[Keep-Alive] 핑 실패: {e}")
         time.sleep(600)
 
-# ==========================================
-# 실행부
-# ==========================================
 if __name__ == "__main__":
     Thread(target=start_websocket, daemon=True).start()
     Thread(target=keep_alive, daemon=True).start()
