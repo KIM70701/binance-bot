@@ -9,10 +9,10 @@ from threading import Thread
 from flask import Flask
 
 # ==========================================
-# 기본 설정 (1분봉 테스트용)
+# 기본 설정
 # ==========================================
 SYMBOL = "ETHUSDT"
-INTERVAL = "1m"
+INTERVAL = "1m"  # 1분봉 테스트 기준
 BB_PERIOD = 45
 BB_STD = 2
 ALERT_COOLDOWN = 60
@@ -24,11 +24,11 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 app = Flask(__name__)
 
 # ==========================================
-# 봇 상태 관리 (엑스레이 추적기 추가)
+# 봇 상태 관리
 # ==========================================
 klines_list = []      
 current_state = "INSIDE"  
-last_xray_time = 0.0  # 엑스레이 로그용 타이머
+first_tick_received = False
 last_alert_times = {
     "상단돌파": 0.0,
     "상단리턴": 0.0,
@@ -38,7 +38,7 @@ last_alert_times = {
 
 @app.route("/")
 def home():
-    return "Bot is running! (V11.27 1분봉 엑스레이 엔진 가동 중)"
+    return "Bot is running! (V11.28 순정/명시적 콜백 엔진)"
 
 def log(msg):
     print(msg, flush=True)
@@ -59,7 +59,7 @@ def handle_sigterm(signum, frame):
 signal.signal(signal.SIGTERM, handle_sigterm)
 
 # ==========================================
-# 초기 캔들 가져오기 (REST API)
+# 초기 데이터 로드 (REST API)
 # ==========================================
 def fetch_initial_klines():
     url = "https://fapi.binance.com/fapi/v1/klines"
@@ -79,16 +79,21 @@ def fetch_initial_klines():
         return []
 
 # ==========================================
-# 핵심 판정 엔진 (엑스레이 실시간 투시 적용)
+# 명시적 웹소켓 콜백 함수 (Lambda 완전 폐기)
 # ==========================================
-def process_websocket_message(message):
-    global klines_list, current_state, last_alert_times, last_xray_time
+def on_message(ws, message):
+    global klines_list, current_state, last_alert_times, first_tick_received
     try:
         data = json.loads(message)
         k = data.get("k")
         if not k: 
             return
         
+        # [수신확인] 첫 데이터 도달 시 즉각 증명 로그 출력
+        if not first_tick_received:
+            log("✅ [수신확인] 바이낸스 실시간 차트 데이터 스트림 개통 완료.")
+            first_tick_received = True
+
         curr_t = int(k["t"])
         curr_c = float(k["c"])
         
@@ -103,9 +108,9 @@ def process_websocket_message(message):
             if len(klines_list) > 100:
                 klines_list.pop(0)
                 
+        # 판정 엔진
         if len(klines_list) >= BB_PERIOD:
-            recent_45 = klines_list[-BB_PERIOD:]
-            df = pd.DataFrame(recent_45)
+            df = pd.DataFrame(klines_list[-BB_PERIOD:].copy())
             ma = df["c"].mean()
             std = df["c"].std(ddof=0)
             up = ma + (BB_STD * std)
@@ -113,11 +118,6 @@ def process_websocket_message(message):
             
             now = time.time()
             alert_msg = None
-            
-            # [엑스레이 시야 확보] 60초마다 무조건 내부 수치 로그 강제 출력
-            if now - last_xray_time >= 60:
-                log(f"🔎 [X-Ray] 현재가: {curr_c} | 상단: {up:.2f} | 하단: {dn:.2f} | 상태: {current_state}")
-                last_xray_time = now
             
             if curr_c >= up and current_state != "ABOVE_UPPER":
                 current_state = "ABOVE_UPPER"
@@ -144,11 +144,21 @@ def process_websocket_message(message):
     except Exception as e:
         log(f"판정 엔진 내부 에러: {e}")
 
+def on_error(ws, error):
+    log(f"웹소켓 네트워크 에러: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    log(f"웹소켓 닫힘 (Code: {close_status_code})")
+
+def on_open(ws):
+    log("웹소켓 연결 성공! 실시간 감시 시작")
+    send_telegram(f"🚀 봇 V11.28(1분봉 표준 콜백 엔진) 가동 시작")
+
 # ==========================================
 # 웹소켓 연결 및 재시작 관리
 # ==========================================
 def start_websocket():
-    global klines_list
+    global klines_list, first_tick_received
     
     klines_list = fetch_initial_klines()
     while not klines_list:
@@ -162,15 +172,17 @@ def start_websocket():
     backoff = 5
     
     while True:
+        first_tick_received = False
         try:
             ws = websocket.WebSocketApp(
                 stream_url,
-                on_message=lambda ws, msg: process_websocket_message(msg),
-                on_error=lambda ws, err: log(f"웹소켓 네트워크 에러: {err}"),
-                on_close=lambda ws, status_code, msg: log(f"웹소켓 닫힘 (Code: {status_code})")
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                on_open=on_open
             )
-            ws.on_open = lambda ws: (log("웹소켓 연결 성공! 실시간 감시 시작"), send_telegram(f"🚀 봇 V11.27(1분봉 테스트+X-Ray) 가동 시작"))
-            ws.run_forever(ping_interval=60, ping_timeout=10)
+            # 라이브러리 내부 블로킹 방지를 위해 ping_interval 제거
+            ws.run_forever()
         except Exception as e:
             log(f"웹소켓 루프 치명적 에러 (스레드 보호됨): {e}")
         
