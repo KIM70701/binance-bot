@@ -1,5 +1,4 @@
-Flask
-pandas
 requests
+pandas
 websocket-client
-pytz
+flask
